@@ -1,0 +1,26 @@
+{
+  "name": "iroh-trpc",
+  "version": "1.0.0",
+  "description": "TypeScript project",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  },
+  "dependencies": {
+    "@number0/iroh": "^0.31.0",
+    "@trpc/client": "11.0.0-rc.682",
+    "@trpc/server": "11.0.0-rc.682",
+    "superjson": "^2.2.2",
+    "zod": "^3.24.1"
+  }
+}
