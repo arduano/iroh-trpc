@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import {
   BiStream,
   Connection,
@@ -27,10 +28,9 @@ import {
 import superjson from "superjson";
 import { z } from "zod";
 import { makeTrpcIrohProtocols } from "./server";
-import { protocolName } from "./helpers";
 import { makeTrpcIrohClient } from "./client";
 
-// 1) Create a basic tRPC Router
+// Create a basic tRPC Router
 const t = initTRPC.create();
 const appRouter = t.router({
   hello: t.procedure.query(() => "world"),
@@ -73,79 +73,162 @@ const appRouter = t.router({
 
 type AppRouter = typeof appRouter;
 
-// 3) The main entry point
-async function main() {
-  console.log("[Main] Starting iroh-trpc server...");
+async function startServer() {
+  console.log("[Server] Starting iroh-trpc server...");
 
-  // 5) Create two nodes: Node1 (server) & Node2 (client)
-  console.log("[Main] Creating nodes...");
-  const node1 = await Iroh.memory({
-    protocols: makeTrpcIrohProtocols({ router: appRouter }),
-  });
-  const node2 = await Iroh.memory({
+  const node = await Iroh.memory({
     protocols: makeTrpcIrohProtocols({ router: appRouter }),
   });
 
-  const node1Addr = await node1.net.nodeAddr();
-  console.log("[Main] Node1 ID:", node1Addr.nodeId.toString());
+  const nodeAddr = await node.net.nodeAddr();
 
-  const endpoint = node2.node.endpoint();
-
-  const client = makeTrpcIrohClient<AppRouter>(endpoint);
-  const node1Client = client.node(node1Addr);
-
-  console.log("[Main] Testing call");
-  //   const result = await node1Client.hello.query();
-  const promise1 = new Promise((resolve) => {
-    const sub = node1Client.countdown.subscribe(5, {
-      onData(data) {
-        console.log("[Main] Received data:", data);
-        // if (data === 5) {
-        //   sub.unsubscribe();
-        //   resolve(null);
-        // }
-      },
-      onError(err) {
-        console.error("[Main] Subscription error:", err);
-      },
-      onComplete() {
-        console.log("[Main] Subscription complete");
-        resolve(null);
-      },
-    });
+  // Create both address formats
+  const basicAddr = serializeNodeAddr({
+    nodeId: nodeAddr.nodeId,
   });
 
-  const promise2 = new Promise((resolve) => {
-    const sub = node1Client.countdown.subscribe(9, {
-      onData(data) {
-        console.log("[Main] Received data:", data);
-      },
-      onError(err) {
-        console.error("[Main] Subscription error:", err);
-      },
-      onComplete() {
-        console.log("[Main] Subscription complete");
-        resolve(null);
-      },
-    });
+  const fullAddr = serializeNodeAddr({
+    nodeId: nodeAddr.nodeId,
+    relayUrl: nodeAddr.relayUrl,
+    addresses: nodeAddr.addresses,
   });
 
-  await Promise.all([promise1, promise2]);
+  console.log("[Server] Node basic address:", basicAddr);
+  console.log("[Server] Node full address:", fullAddr);
+  console.log("[Server] Node ID:", nodeAddr.nodeId);
 
-  await new Promise((resolve) => setTimeout(resolve, 10000));
-
-  // Make another call
-  console.log("[Main] Testing call");
-  const result = await node1Client.hello.query();
-  console.log("[Main] Hello result:", result);
-
-  console.log("[Main] Shutting down nodes...");
-  await node2.node.shutdown();
-  await node1.node.shutdown();
-  console.log("[Main] Clean shutdown complete");
+  // Keep the server running
+  while (true) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
 }
 
-main().catch((err) => {
-  console.error("Error:", err);
-  process.exit(1);
-});
+async function startClient(serverAddrStr: string) {
+  console.log("[Client] Starting iroh-trpc client...");
+  console.log("[Client] Connecting to server:", serverAddrStr);
+
+  const node = await Iroh.memory({});
+  const endpoint = node.node.endpoint();
+
+  const client = makeTrpcIrohClient<AppRouter>(endpoint);
+
+  // Parse the server address
+  const serverAddr = deserializeNodeAddr(serverAddrStr);
+  console.log("[Client] Parsed server address:", serverAddr);
+
+  const serverClient = client.node(serverAddr);
+
+  // Helper function to run a subscription
+  const runSubscription = (count: number) =>
+    new Promise<void>((resolve) => {
+      console.log("[Client] Starting countdown from", count);
+      const sub = serverClient.countdown.subscribe(count, {
+        onData(data) {
+          console.log("[Client] Countdown:", data);
+        },
+        onError(err) {
+          console.error("[Client] Subscription error:", err);
+          resolve();
+        },
+        onComplete() {
+          console.log("[Client] Countdown complete");
+          resolve();
+        },
+      });
+    });
+
+  // Test hello query
+  console.log("[Client] Testing hello query...");
+  const result = await serverClient.hello.query();
+  console.log("[Client] Hello result:", result);
+
+  // Test countdown subscription
+  await runSubscription(5);
+
+  // Cleanup
+  await node.node.shutdown();
+  console.log("[Client] Clean shutdown complete");
+}
+
+const program = new Command();
+
+program
+  .name("iroh-trpc")
+  .description("tRPC over Iroh example application")
+  .version("1.0.0");
+
+program
+  .command("server")
+  .description("Start the tRPC server")
+  .action(async () => {
+    try {
+      await startServer();
+    } catch (err) {
+      console.error("Server error:", err);
+      process.exit(1);
+    }
+  });
+
+program
+  .command("client")
+  .description("Start the tRPC client")
+  .requiredOption("-s, --server <address>", "Server address (base64 encoded)")
+  .action(async (options) => {
+    try {
+      await startClient(options.server);
+    } catch (err) {
+      console.error("Client error:", err);
+      process.exit(1);
+    }
+  });
+
+program.parse();
+
+export type NodeAddressBasic = {
+  type: "basic";
+  nodeId: string;
+};
+
+export type NodeAddressFull = {
+  type: "full";
+  nodeId: string;
+  relayUrl: string;
+  addresses: string[];
+};
+
+export type SerializedNodeAddress = NodeAddressBasic | NodeAddressFull;
+
+export function serializeNodeAddr(addr: {
+  nodeId: string;
+  relayUrl?: string;
+  addresses?: string[];
+}): string {
+  const nodeId = addr.nodeId;
+
+  if (!addr.relayUrl && !addr.addresses) {
+    const basic: NodeAddressBasic = {
+      type: "basic",
+      nodeId,
+    };
+    return Buffer.from(JSON.stringify(basic)).toString("base64");
+  }
+
+  const full: NodeAddressFull = {
+    type: "full",
+    nodeId,
+    relayUrl: addr.relayUrl || "",
+    addresses: addr.addresses || [],
+  };
+  return Buffer.from(JSON.stringify(full)).toString("base64");
+}
+
+export function deserializeNodeAddr(serialized: string): SerializedNodeAddress {
+  const json = Buffer.from(serialized, "base64").toString();
+  const data = JSON.parse(json) as SerializedNodeAddress;
+
+  if (data.type !== "basic" && data.type !== "full") {
+    throw new Error("Invalid node address type");
+  }
+
+  return data;
+}

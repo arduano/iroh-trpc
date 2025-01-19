@@ -17,8 +17,7 @@ export class ConnectionProvider {
     public readonly endpoint: Endpoint,
     public readonly protocol: string,
     private readonly opts?: ConnectionProviderOptions
-  ) {
-  }
+  ) {}
 
   connections = new Map<string, ActiveConnection>();
 
